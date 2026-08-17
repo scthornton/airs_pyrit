@@ -5,6 +5,8 @@ Features: All PyRIT capabilities + Advanced attack techniques + Comprehensive an
 """
 
 import asyncio
+import concurrent.futures
+import importlib
 import json
 import uuid
 import time
@@ -32,142 +34,390 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# PyRIT imports with comprehensive error handling
-try:
-    # Core PyRIT imports
-    from pyrit.prompt_target import PromptTarget
-    from pyrit.models import PromptRequestResponse, PromptRequestPiece, Score
-    from pyrit.common import initialize_pyrit
-    from pyrit.memory import DuckDBMemory, CentralMemory
-    from pyrit.common import default_values
-    
-    PYRIT_BASIC = True
-    
-    # Orchestrators - comprehensive import
-    orchestrator_imports = []
-    orchestrator_classes = {}
-    
-    orchestrator_list = [
-        "PromptSendingOrchestrator",
-        "RedTeamingOrchestrator", 
-        "ScoringOrchestrator",
-        "FlipAttackOrchestrator",
-        "CrescendoOrchestrator",
-        "PAIROrchestrator",
-        "MultiTurnOrchestrator",
-        "TreeOfAttacksWithPruningOrchestrator",
-        "SkeletonKeyOrchestrator",
-        "QuestionAnsweringOrchestrator"
-    ]
-    
-    for orchestrator_name in orchestrator_list:
-        try:
-            exec(f"from pyrit.orchestrator import {orchestrator_name}")
-            orchestrator_classes[orchestrator_name] = globals()[orchestrator_name]
-            orchestrator_imports.append(orchestrator_name)
-        except ImportError:
-            pass
-    
-    # Converters - comprehensive import
-    converter_imports = []
-    available_converters = {}
-    
-    converter_list = [
-        "Base64Converter", "ROT13Converter", "RandomCapitalLettersConverter",
-        "StringJoinConverter", "FlipConverter", "NoiseConverter", "LeetspeakConverter",
-        "UnicodeConfusableConverter", "AsciiArtConverter", "SearchReplaceConverter",
-        "TranslationConverter", "EmojiConverter", "CharacterSpaceConverter",
-        "ToneConverter", "CaesarConverter", "AtbashConverter", "BinaryConverter",
-        "MorseConverter", "ZalgoConverter", "VariationConverter",
-        "MaliciousQuestionGeneratorConverter", "PersuasionConverter",
-        "ShortenConverter", "ExpandConverter", "SummaryConverter",
-        "MathPromptConverter", "SentenceSplitConverter"
-    ]
-    
-    for converter_name in converter_list:
-        try:
-            exec(f"from pyrit.prompt_converter import {converter_name}")
-            available_converters[converter_name] = globals()[converter_name]
-            converter_imports.append(converter_name)
-        except ImportError:
-            pass
-    
-    # Datasets - comprehensive import
-    dataset_imports = []
-    available_datasets = {}
-    
-    dataset_list = [
-        ("fetch_adv_bench_dataset", "AdvBench"),
-        ("fetch_aya_redteaming_dataset", "AYA RedTeaming"),
-        ("fetch_harmbench_dataset", "HarmBench"),
-        ("fetch_forbidden_questions_dataset", "Forbidden Questions"),
-        ("fetch_librAI_do_not_answer_dataset", "LibrAI Do Not Answer"),
-        ("fetch_xstest_dataset", "XSTest"),
-        ("fetch_darkbench_dataset", "DarkBench"),
-        ("fetch_many_shot_jailbreaking_dataset", "Many Shot Jailbreaking"),
-        ("fetch_tdc23_redteaming_dataset", "TDC23 RedTeaming"),
-        ("fetch_pku_safe_rlhf_dataset", "PKU SafeRLHF"),
-        ("fetch_decoding_trust_stereotypes_dataset", "Decoding Trust Stereotypes"),
-        ("fetch_cyberseceval_dataset", "CyberSecEval"),
-        ("fetch_anthropic_hh_dataset", "Anthropic Helpful/Harmless"),
-        ("fetch_prompt_injection_dataset", "Prompt Injection"),
-        ("fetch_jailbreak_dataset", "Jailbreak Prompts"),
-        ("fetch_toxicity_dataset", "Toxicity Detection"),
-        ("fetch_bias_dataset", "Bias Evaluation"),
-        ("fetch_privacy_dataset", "Privacy Attacks")
-    ]
-    
-    for func_name, desc in dataset_list:
-        try:
-            exec(f"from pyrit.datasets import {func_name}")
-            available_datasets[func_name] = desc
-            dataset_imports.append(func_name)
-        except ImportError:
-            pass
-    
-    # Scoring systems
-    scorer_imports = []
-    available_scorers = {}
-    
-    scorer_list = [
-        "SelfAskTruthfulnessScorer", "SelfAskRefusalScorer", "SelfAskCategoryScorer",
-        "SelfAskLikertScorer", "SelfAskMetaScorer", "SubStringScorer",
-        "RegexScorer", "FloatScaleThresholdScorer", "TrueFalseScorer"
-    ]
-    
-    for scorer_name in scorer_list:
-        try:
-            exec(f"from pyrit.score import {scorer_name}")
-            available_scorers[scorer_name] = globals()[scorer_name]
-            scorer_imports.append(scorer_name)
-        except ImportError:
-            pass
-    
-    PYRIT_AVAILABLE = True
-    print(f"✅ Enhanced PyRIT framework loaded successfully")
-    print(f"   📦 Orchestrators: {len(orchestrator_imports)} available")
-    print(f"   🎭 Converters: {len(converter_imports)} available") 
-    print(f"   📚 Datasets: {len(dataset_imports)} available")
-    print(f"   📊 Scorers: {len(scorer_imports)} available")
-    
-except ImportError as e:
-    PYRIT_AVAILABLE = False
-    PYRIT_BASIC = False
-    orchestrator_classes = {}
-    available_converters = {}
-    available_datasets = {}
-    available_scorers = {}
-    orchestrator_imports = []
-    converter_imports = []
-    dataset_imports = []
-    scorer_imports = []
-    print(f"⚠️ PyRIT not available: {e}")
-    print("📝 Install PyRIT for full functionality: pip install pyrit-ai")
+# ---------------------------------------------------------------------------
+# PyRIT imports
+# ---------------------------------------------------------------------------
+# Microsoft's PyRIT ships on PyPI as `pyrit`, NOT `pyrit-ai` (which does not
+# exist). PyRIT 1.0 also renamed most of the surface this script was written
+# against:
+#
+#   pyrit.models.PromptRequestResponse   -> pyrit.models.Message
+#   pyrit.models.PromptRequestPiece      -> pyrit.models.MessagePiece
+#   pyrit.common.initialize_pyrit        -> pyrit.setup.initialize_pyrit_async
+#   pyrit.memory.DuckDBMemory            -> pyrit.memory.SQLiteMemory
+#   pyrit.prompt_converter               -> pyrit.converter
+#   pyrit.orchestrator.*Orchestrator     -> pyrit.executor.attack.*Attack
+#   pyrit.datasets.fetch_*_dataset()     -> pyrit.datasets.SeedDatasetProvider
+#
+# All of those used to sit inside one broad `try: ... except ImportError:`, so
+# on any current PyRIT the FIRST rename aborted the whole block, PYRIT_AVAILABLE
+# silently became False, and the script quietly ran a far weaker assessment than
+# the README advertises without telling anyone. Symbols are now resolved one at
+# a time, against both the 1.x and the 0.x locations, and whatever is still
+# missing is named out loud at startup. See report_pyrit_status().
 
+PYRIT_IMPORT_FAILURES = []
+
+
+def _resolve(candidates):
+    """Return the first (object, "module.attr") pair that resolves, else (None, None).
+
+    `candidates` is a sequence of (module_name, attribute_name) pairs, most
+    preferred first. Used so one symbol can be looked for in both its PyRIT 1.x
+    and its PyRIT 0.x home without a nest of try/except blocks.
+    """
+    for module_name, attr in candidates:
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        obj = getattr(module, attr, None)
+        if obj is not None:
+            return obj, f"{module_name}.{attr}"
+    return None, None
+
+
+def _resolve_module(names):
+    """Return the first importable module from `names`, else None."""
+    for name in names:
+        try:
+            return importlib.import_module(name)
+        except ImportError:
+            continue
+    return None
+
+
+# --- core symbols: without these there is no PyRIT mode at all ---------------
+PromptTarget, _src_target = _resolve([("pyrit.prompt_target", "PromptTarget")])
+Message, _src_message = _resolve([
+    ("pyrit.models", "Message"),                 # PyRIT 1.x
+    ("pyrit.models", "PromptRequestResponse"),   # PyRIT 0.x
+])
+MessagePiece, _src_piece = _resolve([
+    ("pyrit.models", "MessagePiece"),            # PyRIT 1.x
+    ("pyrit.models", "PromptRequestPiece"),      # PyRIT 0.x
+])
+
+for _label, _obj, _tried in (
+    ("PromptTarget", PromptTarget, "pyrit.prompt_target.PromptTarget"),
+    ("Message", Message, "pyrit.models.Message (1.x) / PromptRequestResponse (0.x)"),
+    ("MessagePiece", MessagePiece, "pyrit.models.MessagePiece (1.x) / PromptRequestPiece (0.x)"),
+):
+    if _obj is None:
+        PYRIT_IMPORT_FAILURES.append((_label, _tried))
+
+PYRIT_AVAILABLE = not PYRIT_IMPORT_FAILURES
+PYRIT_BASIC = PYRIT_AVAILABLE
+
+# Old names kept as aliases so the type annotations below stay readable.
+PromptRequestResponse = Message
+PromptRequestPiece = MessagePiece
+
+# PyRIT 1.x names the field `message_pieces`; 0.x named it `request_pieces`.
+PYRIT_PIECES_FIELD = "request_pieces"
+if Message is not None:
+    if "message_pieces" in getattr(Message, "model_fields", {}):
+        PYRIT_PIECES_FIELD = "message_pieces"
+
+# --- optional symbols: missing ones degrade one feature, not the whole run ---
+initialize_pyrit_fn, PYRIT_INIT_SOURCE = _resolve([
+    ("pyrit.setup", "initialize_pyrit_async"),   # PyRIT 1.x, coroutine
+    ("pyrit.common", "initialize_pyrit"),        # PyRIT 0.x, sync
+])
+_memory_class, PYRIT_MEMORY_SOURCE = _resolve([
+    ("pyrit.memory", "SQLiteMemory"),            # PyRIT 1.x
+    ("pyrit.memory", "DuckDBMemory"),            # PyRIT 0.x
+])
+CentralMemory, _ = _resolve([("pyrit.memory", "CentralMemory")])
+default_values, _ = _resolve([("pyrit.common", "default_values")])
+Score, _ = _resolve([("pyrit.models", "Score")])
+
+# DuckDB was dropped as a memory backend in PyRIT 1.0; SQLite replaced it.
+PYRIT_MEMORY_DB_TYPE = "SQLite" if (PYRIT_MEMORY_SOURCE or "").endswith("SQLiteMemory") else "DuckDB"
+
+if initialize_pyrit_fn is None:
+    PYRIT_IMPORT_FAILURES.append(
+        ("initialize_pyrit", "pyrit.setup.initialize_pyrit_async (1.x) / pyrit.common.initialize_pyrit (0.x)")
+    )
+if _memory_class is None:
+    PYRIT_IMPORT_FAILURES.append(
+        ("memory backend", "pyrit.memory.SQLiteMemory (1.x) / pyrit.memory.DuckDBMemory (0.x)")
+    )
+
+# --- attack strategies, formerly orchestrators -------------------------------
+# Keyed by the old orchestrator name so the initialization logic further down,
+# which branches on those names, keeps working unchanged.
+ORCHESTRATOR_RENAMES = {
+    "PromptSendingOrchestrator": ("PromptSendingAttack", "PromptSendingOrchestrator"),
+    "RedTeamingOrchestrator": ("RedTeamingAttack", "RedTeamingOrchestrator"),
+    "ScoringOrchestrator": ("ScoringOrchestrator",),
+    "FlipAttackOrchestrator": ("FlipAttackOrchestrator",),
+    "CrescendoOrchestrator": ("CrescendoAttack", "CrescendoOrchestrator"),
+    "PAIROrchestrator": ("PAIRAttack", "PAIROrchestrator"),
+    "MultiTurnOrchestrator": ("MultiTurnAttackStrategy", "MultiTurnOrchestrator"),
+    "TreeOfAttacksWithPruningOrchestrator": (
+        "TreeOfAttacksWithPruningAttack", "TAPAttack", "TreeOfAttacksWithPruningOrchestrator",
+    ),
+    "SkeletonKeyOrchestrator": ("SkeletonKeyAttack", "SkeletonKeyOrchestrator"),
+    "QuestionAnsweringOrchestrator": ("QuestionAnsweringOrchestrator",),
+}
+
+orchestrator_classes = {}
+orchestrator_imports = []
+_attack_module = _resolve_module(["pyrit.executor.attack", "pyrit.orchestrator"])
+if _attack_module is not None:
+    for legacy_name, new_names in ORCHESTRATOR_RENAMES.items():
+        for new_name in new_names:
+            cls = getattr(_attack_module, new_name, None)
+            if cls is not None:
+                orchestrator_classes[legacy_name] = cls
+                orchestrator_imports.append(legacy_name)
+                break
+
+# --- converters --------------------------------------------------------------
+CONVERTER_NAMES = [
+    "Base64Converter", "ROT13Converter", "RandomCapitalLettersConverter",
+    "StringJoinConverter", "FlipConverter", "NoiseConverter", "LeetspeakConverter",
+    "UnicodeConfusableConverter", "AsciiArtConverter", "SearchReplaceConverter",
+    "TranslationConverter", "EmojiConverter", "CharacterSpaceConverter",
+    "ToneConverter", "CaesarConverter", "AtbashConverter", "BinaryConverter",
+    "MorseConverter", "ZalgoConverter", "VariationConverter",
+    "MaliciousQuestionGeneratorConverter", "PersuasionConverter",
+    "ShortenConverter", "ExpandConverter", "SummaryConverter",
+    "MathPromptConverter", "SentenceSplitConverter",
+]
+
+available_converters = {}
+converter_imports = []
+_converter_module = _resolve_module(["pyrit.converter", "pyrit.prompt_converter"])
+if _converter_module is not None:
+    for _name in CONVERTER_NAMES:
+        _cls = getattr(_converter_module, _name, None)
+        if _cls is not None:
+            available_converters[_name] = _cls
+            converter_imports.append(_name)
+
+# --- datasets ----------------------------------------------------------------
+# PyRIT 1.0 replaced the fetch_*_dataset() functions with SeedDatasetProvider
+# subclasses, discovered through get_all_providers(). The datasets themselves
+# are all still there, they are just reached differently, so this maps the ones
+# this script cares about to their provider keys.
+DATASET_PROVIDERS_V1 = [
+    ("LocalDataset_adv_bench", "AdvBench"),
+    ("_AyaRedteamingDataset", "AYA RedTeaming"),
+    ("_HarmBenchDataset", "HarmBench"),
+    ("_ForbiddenQuestionsDataset", "Forbidden Questions"),
+    ("_LibrAIDoNotAnswerDataset", "LibrAI Do Not Answer"),
+    ("_XSTestDataset", "XSTest"),
+    ("_DarkBenchDataset", "DarkBench"),
+    ("_TDC23RedteamingDataset", "TDC23 RedTeaming"),
+    ("_PKUSafeRLHFDataset", "PKU SafeRLHF"),
+    ("_DecodingTrustToxicityDataset", "Decoding Trust Toxicity"),
+    ("_JailbreakTemplatesDataset", "Jailbreak Templates"),
+    ("_ToxicChatDataset", "ToxicChat"),
+    ("_RedTeamSocialBiasDataset", "Red Team Social Bias"),
+    ("_StrongRejectDataset", "StrongREJECT"),
+    ("_SorryBenchDataset", "SORRY-Bench"),
+    ("_JBBBehaviorsDataset", "JBB Behaviors"),
+    ("_SaladBenchDataset", "SALAD-Bench"),
+    ("_DangerousQADataset", "DangerousQA"),
+]
+
+DATASET_FETCHERS_V0 = [
+    ("fetch_adv_bench_dataset", "AdvBench"),
+    ("fetch_aya_redteaming_dataset", "AYA RedTeaming"),
+    ("fetch_harmbench_dataset", "HarmBench"),
+    ("fetch_forbidden_questions_dataset", "Forbidden Questions"),
+    ("fetch_librAI_do_not_answer_dataset", "LibrAI Do Not Answer"),
+    ("fetch_xstest_dataset", "XSTest"),
+    ("fetch_darkbench_dataset", "DarkBench"),
+    ("fetch_many_shot_jailbreaking_dataset", "Many Shot Jailbreaking"),
+    ("fetch_tdc23_redteaming_dataset", "TDC23 RedTeaming"),
+    ("fetch_pku_safe_rlhf_dataset", "PKU SafeRLHF"),
+    ("fetch_decoding_trust_stereotypes_dataset", "Decoding Trust Stereotypes"),
+]
+
+# name -> zero-argument callable returning a dataset object
+dataset_loaders = {}
+available_datasets = {}
+dataset_imports = []
+
+_seed_provider, _ = _resolve([("pyrit.datasets", "SeedDatasetProvider")])
+if _seed_provider is not None:
+    try:
+        _providers = _seed_provider.get_all_providers()
+    except Exception as _exc:  # discovery is best effort
+        _providers = {}
+        PYRIT_IMPORT_FAILURES.append(("dataset discovery", f"SeedDatasetProvider.get_all_providers(): {_exc}"))
+    for _key, _desc in DATASET_PROVIDERS_V1:
+        _provider_cls = _providers.get(_key)
+        if _provider_cls is None:
+            continue
+
+        def _make_loader(provider_cls=_provider_cls):
+            def _load():
+                return run_coroutine_blocking(provider_cls().fetch_dataset_async())
+            return _load
+
+        dataset_loaders[_key] = _make_loader()
+        available_datasets[_key] = _desc
+        dataset_imports.append(_key)
+else:
+    _datasets_module = _resolve_module(["pyrit.datasets"])
+    if _datasets_module is not None:
+        for _fn_name, _desc in DATASET_FETCHERS_V0:
+            _fn = getattr(_datasets_module, _fn_name, None)
+            if _fn is not None:
+                dataset_loaders[_fn_name] = _fn
+                available_datasets[_fn_name] = _desc
+                dataset_imports.append(_fn_name)
+
+if PYRIT_AVAILABLE and not dataset_loaders:
+    PYRIT_IMPORT_FAILURES.append(
+        ("datasets", "no PyRIT dataset provider resolved, dataset tests will be skipped")
+    )
+
+# --- scorers -----------------------------------------------------------------
+SCORER_NAMES = [
+    "SelfAskTruthfulnessScorer", "SelfAskRefusalScorer", "SelfAskCategoryScorer",
+    "SelfAskLikertScorer", "SelfAskMetaScorer", "SubStringScorer",
+    "RegexScorer", "FloatScaleThresholdScorer", "TrueFalseScorer",
+]
+
+available_scorers = {}
+scorer_imports = []
+_score_module = _resolve_module(["pyrit.score"])
+if _score_module is not None:
+    for _name in SCORER_NAMES:
+        _cls = getattr(_score_module, _name, None)
+        if _cls is not None:
+            available_scorers[_name] = _cls
+            scorer_imports.append(_name)
+
+
+def run_coroutine_blocking(coro):
+    """Run `coro` to completion and return its result, from sync or async code.
+
+    Several PyRIT 1.x entry points that used to be synchronous are coroutines
+    now (initialize_pyrit_async, fetch_dataset_async), and this script calls
+    them from __init__ methods that are themselves constructed inside a running
+    event loop. asyncio.run() would raise there, so hand the coroutine to a
+    worker thread with its own loop when one is already running.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
+def report_pyrit_status():
+    """Print exactly what PyRIT gave us, and what it did not.
+
+    Degrading quietly is the bug this replaced: the old code advertised "11+
+    datasets" and "88 PyRIT dataset tests" in the README while running none of
+    them, and said nothing. Anything unavailable gets named here.
+    """
+    if PYRIT_AVAILABLE:
+        print("✅ PyRIT framework loaded")
+        print(f"   📦 Attack strategies: {len(orchestrator_imports)} available")
+        print(f"   🎭 Converters:        {len(converter_imports)} available")
+        print(f"   📚 Datasets:          {len(dataset_imports)} available")
+        print(f"   📊 Scorers:           {len(scorer_imports)} available")
+        print(f"   💾 Memory backend:    {PYRIT_MEMORY_SOURCE or 'unavailable'}")
+    else:
+        print("=" * 78)
+        print("⚠️  PYRIT IS NOT AVAILABLE - RUNNING A DEGRADED ASSESSMENT")
+        print("=" * 78)
+        print("   PyRIT dataset tests, converter tests and orchestrator tests are")
+        print("   ALL DISABLED. The results below cover only the built-in attack")
+        print("   prompts and are NOT the full assessment described in the README.")
+        print()
+        print("   Install PyRIT with:  pip install --no-cache-dir pyrit")
+        print("   (the package is `pyrit`; `pyrit-ai` does not exist)")
+        print("=" * 78)
+
+    if PYRIT_IMPORT_FAILURES:
+        print()
+        print("⚠️  The following PyRIT symbols could not be resolved:")
+        for label, tried in PYRIT_IMPORT_FAILURES:
+            print(f"     - {label}: looked for {tried}")
+        print("   PyRIT renames things between majors. If you are on a PyRIT newer")
+        print("   than 1.0.1, the names above may have moved again.")
+        print()
+
+
+report_pyrit_status()
+
+
+# ---------------------------------------------------------------------------
+# PyRIT message helpers
+# ---------------------------------------------------------------------------
+def make_message(text: str, role: str = "user", conversation_id: Optional[str] = None):
+    """Build a single-piece PyRIT message, on either PyRIT 1.x or 0.x."""
+    piece_kwargs = {"role": role, "original_value": text, "converted_value": text}
+    if conversation_id:
+        piece_kwargs["conversation_id"] = conversation_id
+    piece = MessagePiece(**piece_kwargs)
+    return Message(**{PYRIT_PIECES_FIELD: [piece]})
+
+
+def message_pieces(message) -> list:
+    """Return a message's pieces regardless of which field name holds them."""
+    pieces = getattr(message, "message_pieces", None)
+    if pieces:
+        return list(pieces)
+    return list(getattr(message, "request_pieces", []) or [])
+
+
+def message_text(message) -> str:
+    """Return the text of a message's first piece, converted value preferred."""
+    pieces = message_pieces(message)
+    if not pieces:
+        return ""
+    return pieces[0].converted_value or pieces[0].original_value or ""
+
+
+# ---------------------------------------------------------------------------
 # Configuration
-PAN_API_KEY = "your_api_key_Here"
-PAN_PROFILE_NAME = "ayour_security_profile_name"
-PAN_BASE_URL = "https://service.api.aisecurity.paloaltonetworks.com"
+# ---------------------------------------------------------------------------
+# Read from the environment rather than being edited into the file. The
+# previous version carried literal placeholders here and the README told people
+# to edit them in place, which is exactly how a live API key ends up in a public
+# commit.
+#
+#   export PAN_API_KEY="..."             # required
+#   export PAN_PROFILE_NAME="..."        # required, your AI security profile
+#   export PAN_BASE_URL="..."            # optional, defaults below
+PAN_API_KEY = os.getenv("PAN_API_KEY", "")
+PAN_PROFILE_NAME = os.getenv("PAN_PROFILE_NAME", "")
+PAN_BASE_URL = os.getenv(
+    "PAN_BASE_URL", "https://service.api.aisecurity.paloaltonetworks.com"
+)
+
+
+def require_pan_configuration() -> bool:
+    """Return True when the PAN credentials are present, complaining if not."""
+    missing = [
+        name for name, value in (
+            ("PAN_API_KEY", PAN_API_KEY),
+            ("PAN_PROFILE_NAME", PAN_PROFILE_NAME),
+        ) if not value
+    ]
+    if not missing:
+        return True
+    print("=" * 78)
+    print("❌ MISSING CONFIGURATION - cannot reach Prisma AIRS")
+    print("=" * 78)
+    for name in missing:
+        print(f"   export {name}='...'")
+    print()
+    print("   PAN_BASE_URL is optional and defaults to")
+    print(f"   {PAN_BASE_URL}")
+    print("=" * 78)
+    return False
+
 
 # Enhanced testing configuration
 ENABLE_PYRIT_DATASETS = True
@@ -235,7 +485,10 @@ class AdvancedEncodingUtils:
 class EnhancedPANTarget(PromptTarget if PYRIT_AVAILABLE else object):
     """Enhanced PAN target with full PyRIT integration and advanced tracking"""
     
-    def __init__(self, api_key: str, profile_name: str, base_url: str):
+    def __init__(self, *, api_key: str, profile_name: str, base_url: str):
+        # Keyword-only is not a style choice: PyRIT 1.x enforces it on every
+        # PromptTarget subclass and raises TypeError at class definition time
+        # if any parameter after self is positional.
         self.api_key = api_key
         self.profile_name = profile_name
         self.base_url = base_url
@@ -253,33 +506,56 @@ class EnhancedPANTarget(PromptTarget if PYRIT_AVAILABLE else object):
                 super().__init__()
                 logger.info(f"🎯 Enhanced PAN target initialized with full PyRIT: {profile_name}")
             except Exception as e:
-                logger.warning(f"⚠️ PyRIT initialization issue: {e}")
+                # Most commonly "Central memory instance has not been set":
+                # PyRIT 1.x requires initialize_pyrit_async() to have run before
+                # any PromptTarget is constructed. UltimateComprehensivePyRITTester
+                # does that in the right order; a caller building this target on
+                # its own has to do it too.
+                logger.warning(
+                    f"⚠️ PyRIT target registration failed ({e}). Continuing in "
+                    "direct-API mode: prompts are still scanned, but this target "
+                    "is not registered with PyRIT memory."
+                )
                 self.pyrit_mode = False
         else:
             logger.info(f"🎯 Basic PAN target initialized: {profile_name}")
     
-    def _validate_request(self, *, prompt_request: PromptRequestResponse) -> None:
+    def _validate_request(self, *, prompt_request) -> None:
         """PyRIT validation method"""
-        if not prompt_request.request_pieces:
+        pieces = message_pieces(prompt_request)
+        if not pieces:
             raise ValueError("No request pieces provided")
-        if not prompt_request.request_pieces[0].converted_value:
+        if not pieces[0].converted_value:
             raise ValueError("No prompt text provided")
-    
-    def is_conversation_complete(self, *, prompt_request: PromptRequestResponse) -> bool:
+
+    async def _send_prompt_to_target_async(self, *, normalized_conversation: list) -> list:
+        """Required by PyRIT 1.x PromptTarget.
+
+        PromptTarget made this the one abstract method, so without it this class
+        cannot be instantiated at all on PyRIT 1.x. Everything in this script
+        calls send_prompt_async() directly, so this is a thin adapter that keeps
+        the class usable by PyRIT's own machinery too.
+        """
+        if not normalized_conversation:
+            raise ValueError("No conversation provided")
+        response = await self.send_prompt_async(prompt_request=normalized_conversation[-1])
+        return [response]
+
+    def is_conversation_complete(self, *, prompt_request) -> bool:
         """Check if conversation is complete (for orchestrator compatibility)"""
         # Simple implementation - always consider single requests complete
         return True
     
-    def set_conversation_complete(self, *, prompt_request: PromptRequestResponse, is_complete: bool = True) -> None:
+    def set_conversation_complete(self, *, prompt_request, is_complete: bool = True) -> None:
         """Set conversation completion status (for orchestrator compatibility)"""
         # No-op for our implementation
         pass
     
-    async def send_prompt_async(self, *, prompt_request: PromptRequestResponse) -> PromptRequestResponse:
+    async def send_prompt_async(self, *, prompt_request):
         """Enhanced send_prompt with comprehensive tracking"""
-        
-        prompt_text = prompt_request.request_pieces[0].converted_value
-        conversation_id = getattr(prompt_request, 'conversation_id', str(uuid.uuid4())[:8])
+
+        prompt_text = message_text(prompt_request)
+        conversation_id = getattr(prompt_request, 'conversation_id', None) or str(uuid.uuid4())[:8]
         
         self.attack_statistics["total_requests"] += 1
         
@@ -313,35 +589,31 @@ class EnhancedPANTarget(PromptTarget if PYRIT_AVAILABLE else object):
                 "statistics": self.attack_statistics.copy()
             }
             
-            response_piece = PromptRequestPiece(
+            # The assistant turn IS the response message. The previous version
+            # built a message out of the request piece and then hung a
+            # `response_pieces` attribute off it, which was never part of the
+            # PyRIT model and is rejected outright by the pydantic model in
+            # PyRIT 1.x.
+            return make_message(
+                json.dumps(response_data, indent=2),
                 role="assistant",
-                original_value=json.dumps(response_data, indent=2),
-                converted_value=json.dumps(response_data, indent=2)
+                conversation_id=conversation_id,
             )
-            
-            # Create response properly for PyRIT compatibility
-            response = PromptRequestResponse(request_pieces=[prompt_request.request_pieces[0]])
-            response.response_pieces = [response_piece]
-            return response
             
         except Exception as e:
             self.attack_statistics["errors"] += 1
             logger.error(f"❌ [{conversation_id}] Error: {str(e)}")
             
-            error_piece = PromptRequestPiece(
-                role="assistant",
-                original_value=json.dumps({
+            return make_message(
+                json.dumps({
                     "error": str(e),
                     "prompt": prompt_text,
                     "conversation_id": conversation_id,
                     "bypassed": False
-                })
+                }),
+                role="assistant",
+                conversation_id=conversation_id,
             )
-            
-            # Create error response properly for PyRIT compatibility
-            error_response = PromptRequestResponse(request_pieces=[prompt_request.request_pieces[0]])
-            error_response.response_pieces = [error_piece]
-            return error_response
     
     async def _call_pan_api(self, prompt_text: str, conversation_id: str) -> dict:
         """Direct PAN API call with enhanced error handling"""
@@ -874,17 +1146,11 @@ class ComprehensiveMultiTurnAttacks:
             try:
                 # Create PyRIT request
                 if PYRIT_AVAILABLE:
-                    request_piece = PromptRequestPiece(
-                        role="user",
-                        original_value=prompt,
-                        converted_value=prompt
-                    )
-                    request = PromptRequestResponse(request_pieces=[request_piece])
-                    request.conversation_id = conversation_id
-                    
+                    request = make_message(prompt, role="user", conversation_id=conversation_id)
+
                     # Send request
                     response = await self.pan_target.send_prompt_async(prompt_request=request)
-                    response_data = json.loads(response.response_pieces[0].original_value)
+                    response_data = json.loads(message_text(response))
                     
                     pan_result = response_data.get("pan_result", {})
                     category = pan_result.get("category", "unknown").lower()
@@ -1206,15 +1472,10 @@ class AdvancedPyRITTestSuite:
         
         try:
             if PYRIT_AVAILABLE:
-                request_piece = PromptRequestPiece(
-                    role="user",
-                    original_value=prompt,
-                    converted_value=prompt
-                )
-                request = PromptRequestResponse(request_pieces=[request_piece])
-                
+                request = make_message(prompt, role="user")
+
                 response = await self.pan_target.send_prompt_async(prompt_request=request)
-                response_data = json.loads(response.response_pieces[0].original_value)
+                response_data = json.loads(message_text(response))
                 
                 pan_result = response_data.get("pan_result", {})
                 category = pan_result.get("category", "unknown").lower()
@@ -1273,8 +1534,10 @@ class PyRITDatasetManager:
         
         for func_name, description in available_datasets.items():
             try:
-                fetch_fn = globals()[func_name]
-                dataset = fetch_fn()
+                # dataset_loaders holds a zero-argument callable per dataset, so
+                # this works for both the PyRIT 1.x SeedDatasetProvider classes
+                # and the 0.x fetch_*_dataset() functions.
+                dataset = dataset_loaders[func_name]()
                 
                 if hasattr(dataset, 'get_values'):
                     prompts = dataset.get_values(first=NUM_PROMPTS_PER_DATASET)
@@ -1283,7 +1546,11 @@ class PyRITDatasetManager:
                 else:
                     prompts = list(dataset)[:NUM_PROMPTS_PER_DATASET]
                 
-                datasets[func_name.replace('fetch_', '').replace('_dataset', '')] = {
+                key = (func_name.replace('fetch_', '')
+                                .replace('_dataset', '')
+                                .replace('LocalDataset_', '')
+                                .lstrip('_'))
+                datasets[key] = {
                     "prompts": prompts,
                     "description": description,
                     "count": len(prompts)
@@ -1486,9 +1753,15 @@ class PyRITOrchestratorSuite:
             for orchestrator_name, orchestrator_class in orchestrator_classes.items():
                 try:
                     if orchestrator_name == "PromptSendingOrchestrator":
-                        self.orchestrators["prompt_sending"] = orchestrator_class(
-                            prompt_target=self.target
-                        )
+                        # PyRIT 1.x renamed the target kwarg to objective_target.
+                        try:
+                            self.orchestrators["prompt_sending"] = orchestrator_class(
+                                objective_target=self.target
+                            )
+                        except TypeError:
+                            self.orchestrators["prompt_sending"] = orchestrator_class(
+                                prompt_target=self.target
+                            )
                     
                     elif orchestrator_name == "FlipAttackOrchestrator":
                         # FlipAttack needs PromptChatTarget, skip if our target isn't compatible
@@ -1523,9 +1796,14 @@ class PyRITOrchestratorSuite:
                     else:
                         # Try basic initialization for other orchestrators
                         try:
-                            self.orchestrators[orchestrator_name.lower()] = orchestrator_class(
-                                prompt_target=self.target
-                            )
+                            try:
+                                self.orchestrators[orchestrator_name.lower()] = orchestrator_class(
+                                    objective_target=self.target
+                                )
+                            except TypeError:
+                                self.orchestrators[orchestrator_name.lower()] = orchestrator_class(
+                                    prompt_target=self.target
+                                )
                         except:
                             logger.info(f"⚠️ Skipping {orchestrator_name} - incompatible with current target")
                             continue
@@ -1547,16 +1825,27 @@ class UltimateComprehensivePyRITTester:
     
     def __init__(self):
         # Initialize PyRIT if available
-        if PYRIT_AVAILABLE:
+        if PYRIT_AVAILABLE and initialize_pyrit_fn is not None:
             try:
-                initialize_pyrit(memory_db_type="DuckDB")
-                default_values.load_default_env()
-                logger.info("✅ PyRIT framework initialized")
+                # PyRIT 1.x: initialize_pyrit_async(memory_db_type="SQLite").
+                # PyRIT 0.x: initialize_pyrit(memory_db_type="DuckDB"), sync.
+                result = initialize_pyrit_fn(memory_db_type=PYRIT_MEMORY_DB_TYPE)
+                if asyncio.iscoroutine(result):
+                    run_coroutine_blocking(result)
+                # load_default_env() is gone in PyRIT 1.x; initialize_pyrit_async
+                # loads the env files itself.
+                if default_values is not None and hasattr(default_values, "load_default_env"):
+                    default_values.load_default_env()
+                logger.info(f"✅ PyRIT framework initialized ({PYRIT_INIT_SOURCE})")
             except Exception as e:
                 logger.warning(f"⚠️ PyRIT initialization issue: {e}")
         
         # Initialize components
-        self.pan_target = EnhancedPANTarget(PAN_API_KEY, PAN_PROFILE_NAME, PAN_BASE_URL)
+        self.pan_target = EnhancedPANTarget(
+            api_key=PAN_API_KEY,
+            profile_name=PAN_PROFILE_NAME,
+            base_url=PAN_BASE_URL,
+        )
         self.dataset_manager = PyRITDatasetManager()
         self.converter_suite = PyRITConverterSuite()
         self.orchestrator_suite = PyRITOrchestratorSuite(self.pan_target) if PYRIT_AVAILABLE else None
@@ -2284,12 +2573,17 @@ async def main():
     print("🚀 Ultimate PyRIT-Enhanced PAN AI Runtime Security Tester")
     print("=" * 80)
     
+    if not require_pan_configuration():
+        return None
+
+    # report_pyrit_status() already printed the detail at import time; repeat the
+    # headline here so it is impossible to miss just before a run starts.
     if not PYRIT_AVAILABLE:
-        print("❌ PyRIT framework not available!")
-        print("📦 Install with: pip install pyrit-ai")
+        print("❌ PyRIT framework not available - this run will be DEGRADED")
+        print("📦 Install with: pip install --no-cache-dir pyrit")
         print("📖 Documentation: https://github.com/Azure/PyRIT")
         print("\n🔄 Falling back to basic testing mode...")
-    
+
     print(f"✅ PyRIT Framework: {'Fully Loaded' if PYRIT_AVAILABLE else 'Basic Mode'}")
     print(f"🧠 Psychological Tests: {'Enabled' if ENABLE_PSYCHOLOGICAL_TESTS else 'Disabled'}")
     print(f"🎭 Metamorphic Tests: {'Enabled' if ENABLE_METAMORPHIC_TESTS else 'Disabled'}")

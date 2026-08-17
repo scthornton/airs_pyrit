@@ -5,7 +5,7 @@ A comprehensive security testing framework for Palo Alto Networks AI Runtime Sec
 ## Features
 
 ### Core Testing Capabilities
-- **PyRIT Dataset Integration** - Tests against 11+ security datasets including AdvBench, HarmBench, and XSTest
+- **PyRIT Dataset Integration** - Tests against 18 security datasets including AdvBench, HarmBench, and XSTest
 - **Advanced Attack Simulation** - Psychological manipulation, metamorphic attacks, and social engineering
 - **Multi-language Evasion** - Tests attacks in 10 different languages
 - **Encoding Bypass Testing** - Comprehensive evasion attempts using various encoding methods
@@ -28,25 +28,49 @@ A comprehensive security testing framework for Palo Alto Networks AI Runtime Sec
 ## Installation
 
 ### Prerequisites
+
+Python 3.10 or newer.
+
 ```bash
-pip install aiohttp
-pip install pyrit-ai
+python3 -m venv .venv && source .venv/bin/activate
+pip install --no-cache-dir aiohttp pyrit
 ```
 
+Microsoft's PyRIT is published on PyPI as **`pyrit`**. There is no package called
+`pyrit-ai`; earlier versions of this README said there was, and the install failed.
+Verified against **pyrit 1.0.1**.
+
+The first run downloads several red-team datasets from HuggingFace and can take a few
+minutes. Subsequent runs use the local cache.
+
 ### Configuration
-Update the configuration variables in the script:
-```python
-PAN_API_KEY = "your-pan-api-key"
-PAN_PROFILE_NAME = "your-security-profile"
-PAN_BASE_URL = "https://service.api.aisecurity.paloaltonetworks.com"
+
+Configuration comes from the environment. Nothing needs to be edited in the script,
+which is deliberate: the previous version told you to type your API key into the source
+file, which is how live keys end up in public commits.
+
+```bash
+export PAN_API_KEY="your-pan-api-key"
+export PAN_PROFILE_NAME="your-security-profile"
+# optional, this is the default
+export PAN_BASE_URL="https://service.api.aisecurity.paloaltonetworks.com"
 ```
+
+The script refuses to start and tells you which variables are missing if either required
+one is unset.
 
 ## Usage
 
 ### Basic Execution
 ```bash
-python enhanced_pan_tester.py
+python pyrit_panw_airs.py
 ```
+
+At startup the script prints exactly what PyRIT gave it: how many attack strategies,
+converters, datasets and scorers resolved, which memory backend is in use, and, if
+anything failed to import, the name of every symbol it could not find. If PyRIT is not
+installed at all it prints a full-width banner saying the assessment is degraded rather
+than quietly running a weaker test.
 
 ### Configuration Options
 Customize testing by modifying these settings:
@@ -83,12 +107,21 @@ ultimate_pyrit_pan_assessment_YYYYMMDD_HHMMSS.json
 
 ## Test Categories
 
-### PyRIT Datasets (88 tests)
-Professional security datasets including:
-- **AdvBench** - Adversarial benchmark prompts
+### PyRIT Datasets
+
+18 datasets are wired up, `NUM_PROMPTS_PER_DATASET` prompts drawn from each (default 8),
+so a full run is roughly 144 dataset-driven tests plus the advanced attack categories
+below. Datasets that fail to download are skipped and logged, so the real count is
+printed at run time rather than assumed. Included:
+
+- **AdvBench** - Adversarial benchmark prompts (bundled with PyRIT, no download)
 - **HarmBench** - Harmful content evaluation
 - **XSTest** - Cross-domain safety testing
 - **Forbidden Questions** - Direct policy violation attempts
+- **AYA RedTeaming**, **LibrAI Do Not Answer**, **DarkBench**, **TDC23 RedTeaming**,
+  **PKU SafeRLHF**, **Decoding Trust Toxicity**, **Jailbreak Templates**, **ToxicChat**,
+  **Red Team Social Bias**, **StrongREJECT**, **SORRY-Bench**, **JBB Behaviors**,
+  **SALAD-Bench**, **DangerousQA**
 
 ### Advanced Attack Techniques (48+ tests)
 - **Psychological Manipulation** - Social engineering techniques
@@ -146,8 +179,31 @@ The tool integrates deeply with Microsoft's PyRIT framework:
 
 **PyRIT Import Errors**
 ```bash
-pip install --upgrade pyrit-ai
+pip install --no-cache-dir --upgrade pyrit
 ```
+
+The package is `pyrit`, not `pyrit-ai`.
+
+If the startup banner lists unresolved symbols, PyRIT has renamed something again. The
+script resolves each symbol against both its PyRIT 1.x and its 0.x location, so the
+listed names tell you exactly what to look for in the PyRIT changelog. Renames already
+handled:
+
+| Old (PyRIT 0.x) | Current (PyRIT 1.x) |
+|---|---|
+| `pyrit.models.PromptRequestResponse` | `pyrit.models.Message` |
+| `pyrit.models.PromptRequestPiece` | `pyrit.models.MessagePiece` |
+| `pyrit.common.initialize_pyrit` | `pyrit.setup.initialize_pyrit_async` |
+| `pyrit.memory.DuckDBMemory` | `pyrit.memory.SQLiteMemory` |
+| `pyrit.prompt_converter` | `pyrit.converter` |
+| `pyrit.orchestrator.*Orchestrator` | `pyrit.executor.attack.*Attack` |
+| `pyrit.datasets.fetch_*_dataset()` | `pyrit.datasets.SeedDatasetProvider` |
+
+**"Central memory instance has not been set"**
+
+PyRIT 1.x requires `initialize_pyrit_async()` to run before any `PromptTarget` is
+constructed. `UltimateComprehensivePyRITTester` does this in the right order. If you
+import `EnhancedPANTarget` yourself, initialize PyRIT first.
 
 **API Authentication Failures**
 - Verify your PAN API key is correct
@@ -191,7 +247,7 @@ This tool is provided for legitimate security testing purposes. Users are respon
 
 For technical issues:
 1. Check the troubleshooting section above
-2. Verify your PyRIT and dependency versions
+2. Verify your PyRIT and dependency versions (`pip show pyrit`; tested against 1.0.1)
 3. Review the generated log files for specific errors
 4. Ensure your PAN configuration allows API access
 

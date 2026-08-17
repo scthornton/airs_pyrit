@@ -3,6 +3,16 @@ __pycache__/
 *.py[cod]
 venv/
 env/
+.venv/
+
+# Run artifacts. The script writes both of these into the working directory on
+# every run, and the JSON assessments contain the attack prompts and the API
+# verdicts for whatever profile was tested.
+pyrit_security_test.log
+ultimate_pyrit_pan_assessment_*.json
+
+# Local credentials
+.env
 
 # AI tool artifacts
 .claude/
